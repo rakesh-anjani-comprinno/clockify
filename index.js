@@ -1,29 +1,26 @@
-import nodemailer from 'nodemailer'
-import { dirname, join } from 'path'
-import { fileURLToPath } from 'url'
-import xlsx from 'xlsx'
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
+import xlsx from 'xlsx';
+import { fetchDataFromApi } from './api/fetch.js';
+import { end, endDateFormat, start, startDateFormat } from './utility/date.js';
+import { sendEmail } from './utility/send/config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-import { fetchDataFromApi } from './api/fetch.js';
-import { start, end, startDateFormat, endDateFormat } from './utility/date.js';
-import { sendEmail } from './utility/send/config.js';
 
 let params = {
   page_size: 50,
 }
 let workspaces = await fetchDataFromApi('api/v1/workspaces', params)
-// console.log("workspaces",workspaces)
 let workspacesIds = workspaces.map((item) => item.id)
 
 
 let s3DataInJson;
 const currentDirectory = __dirname;
-const excelFilePath = join(currentDirectory + "/JIRA Tickets.xlsx")
+const excelFilePath = join(currentDirectory + "/assets/JIRA Tickets.xlsx")
 const s3Workbook = xlsx.readFile(excelFilePath)
 const s3SheetName = s3Workbook.SheetNames[0]
 s3DataInJson = xlsx.utils.sheet_to_json(s3Workbook.Sheets[s3SheetName])
-// console.log("sheetData",s3DataInJson)
 
 let usersDataWithWorkspaceId = {};
 const usersDataWorkspacePromise = []
@@ -59,7 +56,6 @@ allWorkspaceUsers.forEach((workspaceUsers, index) => {
 });
 
 users = users.filter((user) => managedServiceUsers.includes(user.name))
-console.log("users", users)
 
 // Utility Funtions
 
@@ -125,12 +121,13 @@ const checkTicketIdsInTicketIdAndTimeResult = (ticketIds) => {
 }
 
 const getEmail = (userName) => {
-  // users.forEach((user) => {
-  //   if(user.name === userName){
-  //     return user.email;
-  //   }
-  // })
-  return `${userName}.test@gmail.com`
+  let userEmail;
+  users.forEach((user) => {
+    if(user.name === userName){
+      userEmail = user.email
+    }
+  })
+  return userEmail;
 }
 // Utility Funtion End
 
@@ -148,7 +145,6 @@ const comprinno_workspace_id = workspacesIds[0]
 const tagsResult = await fetchDataFromApi(`api/v1/workspaces/${comprinno_workspace_id}/tags`, tagParams)
 const trainingObj = tagsResult.filter(e => e.name === "Training")
 const trainingId = trainingObj[0].id
-// console.log("trainingId",trainingId)
 
 
 // **********Api call to get all time entries of all user in all workspace and also with training tag ***** *****
@@ -166,8 +162,6 @@ for (let workspaceId in usersDataWithWorkspaceId) {
 }
 const timeEntriesForAllUsers = await Promise.all(timeEntriesPromises)
 const timeEntriesWithTrainingTags = await Promise.all(timeEntriesWithTrainingPromises)
-// console.log("timeEntriesForAllUser",timeEntriesForAllUsers)
-// console.log("timeEntriesWithTrainingTags",timeEntriesWithTrainingTags)
 
 // ********** calculation of two sheets and three worksheet by this big funtion **********
 let ticketIdWithEmployeeResults = []
@@ -182,7 +176,6 @@ for (const timeEntriesForOneUser of timeEntriesForAllUsers) {
     let billableCount = 0
     let billableFlag = true
     let totalBillableHours = 0
-    // console.log("userName", userName)
     for (const ticketIdObject of s3DataInJson) {
       const ticketIdToBeFind = ticketIdObject['Issue key']
       const ticketIdToBeFindRegex = new RegExp(`\\b${ticketIdToBeFind}\\b`, 'i')
@@ -200,7 +193,6 @@ for (const timeEntriesForOneUser of timeEntriesForAllUsers) {
         if (ticketIdToBeFindRegex.test(description)) {
 
           const matchedTicketIds = description.match(ticketIdRegex)
-          // console.log("matchedTicketIds",matchedTicketIds)
           if (matchedTicketIds?.length > 1) {
             const timeEntryExist = checkTimeEntryInReport(timeEntry.id)
             if (timeEntryExist.length === 0) {
@@ -217,7 +209,6 @@ for (const timeEntriesForOneUser of timeEntriesForAllUsers) {
                   ticketIdInTicketIdAndTimeResultObj[0].TimeSpend += timeCombineInMs
                 }
               } else {
-                // console.log(userName,ticketIdObject['Issue key'],matchedTicketIds,timeEntry.id,timeSpend,timeEntryExist)
                 for (let item of ticketIdWithEmployeeResults) {
                   if (item.TicketId === matchedTicketIds.join(",") && item.Name === userName) {
                     item.TimeSpend += timeSpend
@@ -241,10 +232,8 @@ for (const timeEntriesForOneUser of timeEntriesForAllUsers) {
       billableFlag = false
 
       if (totalTimeInOneTicketIdForOneUser !== 0) {
-        // console.log("issue key",ticketIdObject['Issue key'])
         const alertStatus = checkAlertStatus(ticketIdObject['Issue key'], ticketIdObject['Summary'])
-        // console.log("alertstatus",alertStatus)
-        // console.log("********************")
+   
         if (ticketIdAndTimeResults.length > 0) {
           const ticketIdAndTimeObj = ticketIdAndTimeResults.filter(item => item.TicketId == ticketIdObject['Issue key'])
           if (ticketIdAndTimeObj.length === 0) {
@@ -260,7 +249,7 @@ for (const timeEntriesForOneUser of timeEntriesForAllUsers) {
 
         const timeSpend = timeInHrsAndMns(totalTimeInOneTicketIdForOneUser)
         ticketIdWithEmployeeResults.push({ Name: userName, TicketId: ticketIdObject['Issue key'], Summary: ticketIdObject['Summary'], TimeSpend: timeSpend, "Alert/NonAlert": alertStatus })
-        // console.log("Results inside TotalTimeInOneTicketIdForOneUser",ticketIdWithEmployeeResults)
+        
       }
 
     }
@@ -290,31 +279,14 @@ totalTrainingTimeCalculate()
 ticketIdAndTimeResults.forEach((item, index, ticketIdAndTimeResults) => {
   ticketIdAndTimeResults[index].TimeSpend = timeInHrsAndMns(item.TimeSpend)
 })
-// console.log("ticketIdAndTimeResults",ticketIdAndTimeResults)
-
 
 // **********Delete the TimeEntry Field in ticketIdWithEmployeeResults**********
 for (let item of ticketIdWithEmployeeResults) {
   delete item.TimeEntryId
 }
-// console.log("ticketIdWithEmployeeResults",ticketIdWithEmployeeResults)
 
 // ********* Leave Hour ************
-const workingHours = [
-  { userName: "Aman Kumar", workday: 19 },
-  { userName: "Aristotle Diogo Fernandes", workday: 21 },
-  { userName: "Mohammed Rizwan", workday: 23 },
-  { userName: "Narahari Mengane", workday: 0 },
-  { userName: "Nikita Dehariya", workday: 0 },
-  { userName: "Parikshit Taksande", workday: 21 },
-  { userName: "Sandeep Malakar", workday: 21 },
-  { userName: "Sandeep Kumar Maurya", workday: 23 },
-  { userName: "Satish Gogiya", workday: 21 },
-  { userName: "Tarun Sharma", workday: 0 },
-  { userName: "Krisnaraj K.C", workday: 22 },
-  { userName: "Pradap V", workday: 21 },
-  { userName: "Atharva Nevase", workday: 11 },
-]
+import { workingHours } from './utility/workingHours.js';
 
 // ********** first worksheet Result in Sheet2 [alert_Non_Alert_result with some extra info] **********
 const alertNonAlertResults = []
@@ -323,7 +295,6 @@ let previousUser = currentUser
 let no_of_alert = 0
 let no_of_non_alert = 0
 let total_time_for_tickets = 0
-// let workingHoursofMonths = 21 * 8
 for (let i = 0; i < ticketIdWithEmployeeResults.length; i++) {
   if (currentUser === ticketIdWithEmployeeResults[i].Name) {
     total_time_for_tickets += ticketIdWithEmployeeResults[i].TimeSpend
@@ -362,7 +333,7 @@ for (let i = 0; i < ticketIdWithEmployeeResults.length; i++) {
         Your current utilization is below the required threshold of 70%. Below are the details:
         ${memberName} : ${memberUtilization.toFixed(2)}% 
         `;
-        sendEmail(recepentsEmails, subject, body, carbonCopyRecepents)
+        sendEmail({recepentsEmails, subject, body, carbonCopyRecepents})
       }
       memberUtilization = memberUtilization.toFixed(2) + "%"
     }
@@ -409,7 +380,7 @@ for (let i = 0; i < ticketIdWithEmployeeResults.length; i++) {
         Your current utilization is below the required threshold of 70%. Below are the details:
         ${memberName} : ${memberUtilization.toFixed(2)}% 
         `;
-        sendEmail(recepentsEmails, subject, body, carbonCopyRecepents)
+        sendEmail({recepentsEmails, subject, body, carbonCopyRecepents})
       }
       memberUtilization = memberUtilization.toFixed(2) + "%"
     }
@@ -417,8 +388,6 @@ for (let i = 0; i < ticketIdWithEmployeeResults.length; i++) {
     alertNonAlertResults.push({ "Team member": previousUser, "No.of alert tickets": no_of_alert, "No. of Non alert tickets": no_of_non_alert, "Billable (Hrs)": billableHourInMns, "Total time - Tickets worked on (Hrs)": total_time_for_tickets, "Training hours": trainingTimeSpend, "Working hours for the month": workHours, "Member Utilization": memberUtilization })
   }
 }
-// console.log(alertNonAlertResults)
-
 
 // ********** Generating First Sheet 1 **********
 const ticketIdAndTimeWorkbook = xlsx.utils.book_new();
@@ -446,7 +415,7 @@ const sendEmailReport =  () => {
   // const emails = ['ankith.s@comprinno.net']
   // const emails = ['ankith.s@comprinno.net','coe@comprinno.net']
 
-  const recepeints = emails;
+  const recepentsEmails = emails;
   const subject = `Managed Services Team Timesheet Reports: ${convertToMonthFullName(start)} ${start.split("-")[0]}`;
   const body = `
     Please find attached the timesheet reports for our Managed Services team.
@@ -466,7 +435,7 @@ const sendEmailReport =  () => {
     },
   ]
 
-  sendEmail(recepeints, subject, body, '', attachments)
+  sendEmail({recepentsEmails, subject, body, attachments})
 }
 
 sendEmailReport()

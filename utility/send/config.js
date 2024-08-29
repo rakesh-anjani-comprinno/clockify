@@ -2,7 +2,7 @@ import nodemailer from 'nodemailer'
 import dotenv from 'dotenv'
 dotenv.config()
 
-export const sendEmail = async (recepentsEmails, subject, body, carbonCopyRecepents = '', attachments = []) => {
+export const sendEmail = async ({recepentsEmails, subject, body, carbonCopyRecepents = '', attachments = []}) => {
     const transport = nodemailer.createTransport({
       service: 'gmail',
       auth: {
@@ -18,6 +18,7 @@ export const sendEmail = async (recepentsEmails, subject, body, carbonCopyRecepe
         text: body,
         attachments:attachments
     }
+
     await transport.sendMail(mailOptions)
     console.log('mail send.....')
 }
