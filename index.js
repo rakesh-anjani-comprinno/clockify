@@ -1,72 +1,19 @@
-import dotenv from 'dotenv'
-dotenv.config()
-import axios from 'axios'
-import json2xls from 'json2xls'
-import fs from 'fs'
 import nodemailer from 'nodemailer'
-import moment from 'moment'
+import { dirname, join } from 'path'
+import { fileURLToPath } from 'url'
 import xlsx from 'xlsx'
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-
-const start = "2024-07-01"
-const end = "2024-07-31"
-const startDateFormat = start + "T00:00:00Z"
-const endDateFormat = end + "T23:59:59Z"
-
-const BASE_URL = "https://api.clockify.me/";
-const clockifyApiKey = process.env.API_KEY
-const headers = {
-  'X-Api-Key': clockifyApiKey
-};
+import { fetchDataFromApi } from './api/fetch.js';
+import { start, end, startDateFormat, endDateFormat } from './utility/date.js';
+import { sendEmail } from './utility/send/config.js';
 
 let params = {
   page_size: 50,
 }
-const maxRetries = 50;
-const fetchDataFromApi = async (url, params, currentRetry = 0) => {
-  let results = []
-  let page = 1
-  while (true) {
-    try {
-      const response = await axios.get(BASE_URL + url, {
-        headers,
-        params: { ...params, page: page },
-      });
-      const responseData = response.data
-      results = results.concat(responseData)
-      if (responseData.length < params.page_size) {
-        break
-      }
-      page += 1;
-    } catch (err) {
-      if (err.response.status === 429) {
-        const retryAfter = err.response.headers.get('Retry-After') || 1;
-        await wait(retryAfter * 1000);
-        if (currentRetry < maxRetries) {
-          currentRetry++;
-          // console.log("currentretry",url,params,"page**",page,currentRetry)
-        } else {
-          console.log("Max retries reached", page, params, url)
-          return err.response.data
-        }
-      } else {
-        console.log("response error data", err.response.data)
-        return err.response.data
-      }
-    }
-  }
-  return results
-};
-
-const wait = (ms) => {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 let workspaces = await fetchDataFromApi('api/v1/workspaces', params)
-
+// console.log("workspaces",workspaces)
 let workspacesIds = workspaces.map((item) => item.id)
 
 
@@ -76,18 +23,20 @@ const excelFilePath = join(currentDirectory + "/JIRA Tickets.xlsx")
 const s3Workbook = xlsx.readFile(excelFilePath)
 const s3SheetName = s3Workbook.SheetNames[0]
 s3DataInJson = xlsx.utils.sheet_to_json(s3Workbook.Sheets[s3SheetName])
-console.log("sheetData",s3DataInJson)
+// console.log("sheetData",s3DataInJson)
 
 let usersDataWithWorkspaceId = {};
 const usersDataWorkspacePromise = []
 
+let managedServiceUsers = ['Aman Kumar', 'Aristotle Diogo Fernandes', 'Krisnaraj K.C', 'Mohammed Rizwan',
+  'Parikshit Taksande', 'Pradap V', 'Sandeep Malakar', 'Sandeep Kumar Maurya', 'Satish Gogiya'
+]
 const paramsUser = { ...params }
 workspacesIds.forEach(workspaceid => {
   usersDataWithWorkspaceId[workspaceid] = []
   usersDataWorkspacePromise.push(fetchDataFromApi(`api/v1/workspaces/${workspaceid}/users`, paramsUser))
 });
-const allWorkspaceUsers = await Promise.all(usersDataWorkspacePromise)
-// console.log(allWorkspaceUsers)
+let allWorkspaceUsers = await Promise.all(usersDataWorkspacePromise)
 
 let users = []
 let firstUserAdded = false
@@ -108,7 +57,9 @@ allWorkspaceUsers.forEach((workspaceUsers, index) => {
   })
 
 });
-// console.log("users", users)
+
+users = users.filter((user) => managedServiceUsers.includes(user.name))
+console.log("users", users)
 
 // Utility Funtions
 
@@ -160,7 +111,7 @@ const checkTicketIdsInReport = (ticketIds, userName) => {
   return ticketIdObj
 }
 
-const checkAlertStatus = (ticketIdString,summary)=> {
+const checkAlertStatus = (ticketIdString, summary) => {
   const isTicketIdMatched = /BSD|LAD|MAD|FAS|NHA|HSD|SAJ|HXA|BASD|NASD|PSAD/.test(ticketIdString)
   const isSummaryMatched = /\[FIRING:1\]/.test(summary)
   const isAlert = isTicketIdMatched + isSummaryMatched
@@ -171,6 +122,15 @@ const checkAlertStatus = (ticketIdString,summary)=> {
 const checkTicketIdsInTicketIdAndTimeResult = (ticketIds) => {
   const ticketIdObj = ticketIdAndTimeResults.filter(item => item.TicketId === ticketIds)
   return ticketIdObj
+}
+
+const getEmail = (userName) => {
+  // users.forEach((user) => {
+  //   if(user.name === userName){
+  //     return user.email;
+  //   }
+  // })
+  return `${userName}.test@gmail.com`
 }
 // Utility Funtion End
 
@@ -185,7 +145,7 @@ const tagParams = {
   archived: false
 }
 const comprinno_workspace_id = workspacesIds[0]
-const tagsResult = await fetchDataFromApi(`api/v1/workspaces/${comprinno_workspace_id}/tags`,tagParams)
+const tagsResult = await fetchDataFromApi(`api/v1/workspaces/${comprinno_workspace_id}/tags`, tagParams)
 const trainingObj = tagsResult.filter(e => e.name === "Training")
 const trainingId = trainingObj[0].id
 // console.log("trainingId",trainingId)
@@ -196,12 +156,12 @@ const timeEntriesPromises = []
 const timeEntriesWithTrainingPromises = []
 const traingTagParams = {
   ...params,
-  tags:trainingId
+  tags: trainingId
 }
 for (let workspaceId in usersDataWithWorkspaceId) {
   usersDataWithWorkspaceId[workspaceId].forEach((userDoc) => {
     timeEntriesPromises.push(fetchDataFromApi(`api/v1/workspaces/${workspaceId}/user/${userDoc.id}/time-entries`, params))
-    timeEntriesWithTrainingPromises.push(fetchDataFromApi(`api/v1/workspaces/${workspaceId}/user/${userDoc.id}/time-entries?`,traingTagParams))
+    timeEntriesWithTrainingPromises.push(fetchDataFromApi(`api/v1/workspaces/${workspaceId}/user/${userDoc.id}/time-entries?`, traingTagParams))
   })
 }
 const timeEntriesForAllUsers = await Promise.all(timeEntriesPromises)
@@ -228,47 +188,47 @@ for (const timeEntriesForOneUser of timeEntriesForAllUsers) {
       const ticketIdToBeFindRegex = new RegExp(`\\b${ticketIdToBeFind}\\b`, 'i')
       let totalTimeInOneTicketIdForOneUser = 0;
 
-      timeEntriesForOneUser.forEach( timeEntry => {
-        if(billableFlag){
-          if(timeEntry.billable === true){
-            const timeForOneTimeEntry = timeIntervalInMilliseconds(timeEntry.timeInterval.start,timeEntry.timeInterval.end)
+      timeEntriesForOneUser.forEach(timeEntry => {
+        if (billableFlag) {
+          if (timeEntry.billable === true) {
+            const timeForOneTimeEntry = timeIntervalInMilliseconds(timeEntry.timeInterval.start, timeEntry.timeInterval.end)
             const timeInHrsForOneTimeEntry = timeInHrsAndMns(timeForOneTimeEntry)
             totalBillableHours += timeInHrsForOneTimeEntry
           }
         }
         const description = timeEntry.description
         if (ticketIdToBeFindRegex.test(description)) {
-          
+
           const matchedTicketIds = description.match(ticketIdRegex)
           // console.log("matchedTicketIds",matchedTicketIds)
-          if(matchedTicketIds?.length > 1) {
+          if (matchedTicketIds?.length > 1) {
             const timeEntryExist = checkTimeEntryInReport(timeEntry.id)
-            if(timeEntryExist.length === 0){
-              const ticketIdsExist = checkTicketIdsInReport(matchedTicketIds.join(","),userName)
-              const timeCombineInMs = timeIntervalInMilliseconds(timeEntry.timeInterval.start,timeEntry.timeInterval.end)
+            if (timeEntryExist.length === 0) {
+              const ticketIdsExist = checkTicketIdsInReport(matchedTicketIds.join(","), userName)
+              const timeCombineInMs = timeIntervalInMilliseconds(timeEntry.timeInterval.start, timeEntry.timeInterval.end)
               const timeSpend = timeInHrsAndMns(timeCombineInMs)
-              const alertStatus = checkAlertStatus(matchedTicketIds.join(","),ticketIdObject['Summary'])
-              if(ticketIdsExist.length === 0){
-                ticketIdWithEmployeeResults.push({ Name: userName, TicketId: matchedTicketIds.join(","), Summary: ticketIdObject['Summary'], TimeSpend:timeSpend, "Alert/NonAlert": alertStatus, TimeEntryId:[timeEntry.id]})
+              const alertStatus = checkAlertStatus(matchedTicketIds.join(","), ticketIdObject['Summary'])
+              if (ticketIdsExist.length === 0) {
+                ticketIdWithEmployeeResults.push({ Name: userName, TicketId: matchedTicketIds.join(","), Summary: ticketIdObject['Summary'], TimeSpend: timeSpend, "Alert/NonAlert": alertStatus, TimeEntryId: [timeEntry.id] })
                 let ticketIdInTicketIdAndTimeResultObj = checkTicketIdsInTicketIdAndTimeResult(matchedTicketIds.join(","))
-                if(ticketIdInTicketIdAndTimeResultObj.length === 0){
-                  ticketIdAndTimeResults.push({ TicketId: matchedTicketIds.join(","),Summary: ticketIdObject['Summary'],TimeSpend: timeCombineInMs, "Alert/NonAlert": alertStatus })
-                }else{
+                if (ticketIdInTicketIdAndTimeResultObj.length === 0) {
+                  ticketIdAndTimeResults.push({ TicketId: matchedTicketIds.join(","), Summary: ticketIdObject['Summary'], TimeSpend: timeCombineInMs, "Alert/NonAlert": alertStatus })
+                } else {
                   ticketIdInTicketIdAndTimeResultObj[0].TimeSpend += timeCombineInMs
-                } 
-              }else{
+                }
+              } else {
                 // console.log(userName,ticketIdObject['Issue key'],matchedTicketIds,timeEntry.id,timeSpend,timeEntryExist)
-                  for(let item of ticketIdWithEmployeeResults){
-                    if(item.TicketId === matchedTicketIds.join(",") && item.Name === userName){
-                      item.TimeSpend += timeSpend
-                      item.TimeEntryId.push(timeEntry.id)
-                    }
+                for (let item of ticketIdWithEmployeeResults) {
+                  if (item.TicketId === matchedTicketIds.join(",") && item.Name === userName) {
+                    item.TimeSpend += timeSpend
+                    item.TimeEntryId.push(timeEntry.id)
                   }
+                }
                 let ticketIdInTicketIdAndTimeResultObj = checkTicketIdsInTicketIdAndTimeResult(matchedTicketIds.join(","))
                 ticketIdInTicketIdAndTimeResultObj[0].TimeSpend += timeCombineInMs
-              } 
-            }            
-          }else {
+              }
+            }
+          } else {
             const timeDurationStart = timeEntry.timeInterval.start
             const timeDurationEnd = timeEntry.timeInterval.end
             totalTimeInOneTicketIdForOneUser = totalTimeInOneTicketIdForOneUser + timeIntervalInMilliseconds(timeDurationStart, timeDurationEnd)
@@ -282,7 +242,7 @@ for (const timeEntriesForOneUser of timeEntriesForAllUsers) {
 
       if (totalTimeInOneTicketIdForOneUser !== 0) {
         // console.log("issue key",ticketIdObject['Issue key'])
-        const alertStatus = checkAlertStatus(ticketIdObject['Issue key'],ticketIdObject['Summary'])
+        const alertStatus = checkAlertStatus(ticketIdObject['Issue key'], ticketIdObject['Summary'])
         // console.log("alertstatus",alertStatus)
         // console.log("********************")
         if (ticketIdAndTimeResults.length > 0) {
@@ -294,7 +254,7 @@ for (const timeEntriesForOneUser of timeEntriesForAllUsers) {
             ticketIdAndTimeObj[0].TimeSpend += totalTimeInOneTicketIdForOneUser
           }
         } else {
-          const firstTicketIdAndTime = { TicketId: ticketIdObject['Issue key'], Summary: ticketIdObject['Summary'],TimeSpend: totalTimeInOneTicketIdForOneUser,"Alert/NonAlert": alertStatus }
+          const firstTicketIdAndTime = { TicketId: ticketIdObject['Issue key'], Summary: ticketIdObject['Summary'], TimeSpend: totalTimeInOneTicketIdForOneUser, "Alert/NonAlert": alertStatus }
           ticketIdAndTimeResults.push(firstTicketIdAndTime)
         }
 
@@ -304,7 +264,7 @@ for (const timeEntriesForOneUser of timeEntriesForAllUsers) {
       }
 
     }
-    billableHoursInfo.push({userName,totalBillableHours})
+    billableHoursInfo.push({ userName, totalBillableHours })
   }
 }
 
@@ -316,11 +276,11 @@ const totalTrainingTimeCalculate = () => {
       const userName = findUserNameById(userId)
       let totalTimeInTraining = 0
       timeEntriesSet.forEach(timeEntry => {
-        const timeInMs = timeIntervalInMilliseconds(timeEntry.timeInterval.start,timeEntry.timeInterval.end)
+        const timeInMs = timeIntervalInMilliseconds(timeEntry.timeInterval.start, timeEntry.timeInterval.end)
         const timeInHrs = timeInHrsAndMns(timeInMs)
         totalTimeInTraining += timeInHrs
       })
-      trainingAndUsers.push({userName,totalTimeInTraining})
+      trainingAndUsers.push({ userName, totalTimeInTraining })
     }
   })
 }
@@ -334,26 +294,26 @@ ticketIdAndTimeResults.forEach((item, index, ticketIdAndTimeResults) => {
 
 
 // **********Delete the TimeEntry Field in ticketIdWithEmployeeResults**********
-for(let item of ticketIdWithEmployeeResults){
+for (let item of ticketIdWithEmployeeResults) {
   delete item.TimeEntryId
 }
 // console.log("ticketIdWithEmployeeResults",ticketIdWithEmployeeResults)
 
 // ********* Leave Hour ************
 const workingHours = [
-  { userName: "Aman Kumar",workday:19},
-  { userName: "Aristotle Diogo Fernandes",workday:21},
-  { userName: "Mohammed Rizwan",workday:23},
-  { userName: "Narahari Mengane",workday:0},
-  { userName: "Nikita Dehariya",workday:0},
-  { userName: "Parikshit Taksande",workday:21},
-  { userName: "Sandeep Malakar",workday:21},
-  { userName: "Sandeep Kumar Maurya",workday:23},
-  { userName: "Satish Gogiya",workday:21},
-  { userName: "Tarun Sharma",workday:0},
-  { userName: "Krisnaraj K.C",workday:22},
-  { userName: "Pradap V",workday:21},
-  { userName: "Atharva Nevase",workday:11},
+  { userName: "Aman Kumar", workday: 19 },
+  { userName: "Aristotle Diogo Fernandes", workday: 21 },
+  { userName: "Mohammed Rizwan", workday: 23 },
+  { userName: "Narahari Mengane", workday: 0 },
+  { userName: "Nikita Dehariya", workday: 0 },
+  { userName: "Parikshit Taksande", workday: 21 },
+  { userName: "Sandeep Malakar", workday: 21 },
+  { userName: "Sandeep Kumar Maurya", workday: 23 },
+  { userName: "Satish Gogiya", workday: 21 },
+  { userName: "Tarun Sharma", workday: 0 },
+  { userName: "Krisnaraj K.C", workday: 22 },
+  { userName: "Pradap V", workday: 21 },
+  { userName: "Atharva Nevase", workday: 11 },
 ]
 
 // ********** first worksheet Result in Sheet2 [alert_Non_Alert_result with some extra info] **********
@@ -364,73 +324,97 @@ let no_of_alert = 0
 let no_of_non_alert = 0
 let total_time_for_tickets = 0
 // let workingHoursofMonths = 21 * 8
-for(let i= 0;i<ticketIdWithEmployeeResults.length;i++){
-  if(currentUser === ticketIdWithEmployeeResults[i].Name){
-      total_time_for_tickets += ticketIdWithEmployeeResults[i].TimeSpend
-      if(ticketIdWithEmployeeResults[i]['Alert/NonAlert'] === "Alert"){
-          no_of_alert += 1
-      }
-      if(ticketIdWithEmployeeResults[i]['Alert/NonAlert'] === "Non Alert"){
-          no_of_non_alert += 1
-      }
-      previousUser = currentUser
-  }else{
-      const billableInfo = billableHoursInfo.filter((info) => info.userName === previousUser )
-      const billableHourInMns = billableInfo[0].totalBillableHours 
-      
-      const trainingInfo = trainingAndUsers.filter((trainingUserDetail) => trainingUserDetail.userName === previousUser)
-      let trainingTimeSpend;
-      if(trainingInfo.length === 0){
-        trainingTimeSpend = 0
-      }else{
-        trainingTimeSpend = trainingInfo[0].totalTimeInTraining 
-      }
-
-      const workInfo = workingHours.filter((info)=> info.userName === previousUser )
-      const workHours = workInfo.length ? workInfo[0].workday * 8 : 0
-
-      let memberUtilization = 'N/A'
-      if(workHours > 0){
-        memberUtilization = ( total_time_for_tickets / (workHours - trainingTimeSpend )) * 100
-        memberUtilization =  memberUtilization.toFixed(2) + "%"
-      }
-      
-      alertNonAlertResults.push({"Team member":previousUser,"No.of alert tickets":no_of_alert,"No. of Non alert tickets":no_of_non_alert,"Billable (Hrs)":billableHourInMns,"Total time - Tickets worked on (Hrs)":total_time_for_tickets ,"Training hours":trainingTimeSpend,"Working hours for the month":workHours,"Member Utilization":memberUtilization })
-      
-      currentUser = ticketIdWithEmployeeResults[i].Name
-      total_time_for_tickets = ticketIdWithEmployeeResults[i].TimeSpend
-      if(ticketIdWithEmployeeResults[i]['Alert/NonAlert'] === "Alert"){
-          no_of_alert = 1
-          no_of_non_alert = 0
-      }
-      if(ticketIdWithEmployeeResults[i]['Alert/NonAlert'] === "Non Alert"){
-          no_of_non_alert = 1
-          no_of_alert = 0
-      }
-      previousUser = currentUser
-  }
-  if(i === ticketIdWithEmployeeResults.length-1 ){
-    const billableInfo = billableHoursInfo.filter((info) => info.userName === previousUser )
-    const billableHourInMns = billableInfo[0].totalBillableHours 
+for (let i = 0; i < ticketIdWithEmployeeResults.length; i++) {
+  if (currentUser === ticketIdWithEmployeeResults[i].Name) {
+    total_time_for_tickets += ticketIdWithEmployeeResults[i].TimeSpend
+    if (ticketIdWithEmployeeResults[i]['Alert/NonAlert'] === "Alert") {
+      no_of_alert += 1
+    }
+    if (ticketIdWithEmployeeResults[i]['Alert/NonAlert'] === "Non Alert") {
+      no_of_non_alert += 1
+    }
+    previousUser = currentUser
+  } else {
+    const billableInfo = billableHoursInfo.filter((info) => info.userName === previousUser)
+    const billableHourInMns = billableInfo[0].totalBillableHours
 
     const trainingInfo = trainingAndUsers.filter((trainingUserDetail) => trainingUserDetail.userName === previousUser)
     let trainingTimeSpend;
-    if(trainingInfo.length === 0){
+    if (trainingInfo.length === 0) {
       trainingTimeSpend = 0
-    }else{
-      trainingTimeSpend = trainingInfo[0].totalTimeInTraining 
+    } else {
+      trainingTimeSpend = trainingInfo[0].totalTimeInTraining
     }
 
-    const workInfo = workingHours.filter((info)=> info.userName === previousUser )
+    const workInfo = workingHours.filter((info) => info.userName === previousUser)
     const workHours = workInfo.length ? workInfo[0].workday * 8 : 0
 
     let memberUtilization = 'N/A'
-    if(workHours > 0){
-      memberUtilization = ( total_time_for_tickets / (workHours - trainingTimeSpend )) * 100
-      memberUtilization =  memberUtilization.toFixed(2) + "%"
+    if (workHours > 0) {
+      memberUtilization = (total_time_for_tickets / (workHours - trainingTimeSpend)) * 100
+      if (memberUtilization < 70) {
+        const memberName = previousUser
+        const recepentsEmails = getEmail(previousUser)
+        const carbonCopyRecepents = ['rkanjani14@gmail.com', 'rkanjani18@gmail.com']
+        const subject = `CloudOps Team Member Utilization Below 70% Test`
+        const body = `
+        Dear ${memberName},
+        Your current utilization is below the required threshold of 70%. Below are the details:
+        ${memberName} : ${memberUtilization.toFixed(2)}% 
+        `;
+        sendEmail(recepentsEmails, subject, body, carbonCopyRecepents)
+      }
+      memberUtilization = memberUtilization.toFixed(2) + "%"
     }
 
-    alertNonAlertResults.push({"Team member":previousUser,"No.of alert tickets":no_of_alert,"No. of Non alert tickets":no_of_non_alert,"Billable (Hrs)":billableHourInMns,"Total time - Tickets worked on (Hrs)":total_time_for_tickets,"Training hours":trainingTimeSpend,"Working hours for the month":workHours,"Member Utilization":memberUtilization })
+    alertNonAlertResults.push({ "Team member": previousUser, "No.of alert tickets": no_of_alert, "No. of Non alert tickets": no_of_non_alert, "Billable (Hrs)": billableHourInMns, "Total time - Tickets worked on (Hrs)": total_time_for_tickets, "Training hours": trainingTimeSpend, "Working hours for the month": workHours, "Member Utilization": memberUtilization })
+
+    currentUser = ticketIdWithEmployeeResults[i].Name
+    total_time_for_tickets = ticketIdWithEmployeeResults[i].TimeSpend
+    if (ticketIdWithEmployeeResults[i]['Alert/NonAlert'] === "Alert") {
+      no_of_alert = 1
+      no_of_non_alert = 0
+    }
+    if (ticketIdWithEmployeeResults[i]['Alert/NonAlert'] === "Non Alert") {
+      no_of_non_alert = 1
+      no_of_alert = 0
+    }
+    previousUser = currentUser
+  }
+  if (i === ticketIdWithEmployeeResults.length - 1) {
+    const billableInfo = billableHoursInfo.filter((info) => info.userName === previousUser)
+    const billableHourInMns = billableInfo[0].totalBillableHours
+
+    const trainingInfo = trainingAndUsers.filter((trainingUserDetail) => trainingUserDetail.userName === previousUser)
+    let trainingTimeSpend;
+    if (trainingInfo.length === 0) {
+      trainingTimeSpend = 0
+    } else {
+      trainingTimeSpend = trainingInfo[0].totalTimeInTraining
+    }
+
+    const workInfo = workingHours.filter((info) => info.userName === previousUser)
+    const workHours = workInfo.length ? workInfo[0].workday * 8 : 0
+
+    let memberUtilization = 'N/A'
+    if (workHours > 0) {
+      memberUtilization = (total_time_for_tickets / (workHours - trainingTimeSpend)) * 100
+      if (memberUtilization < 70) {
+        const memberName = previousUser
+        const recepentsEmails = getEmail(previousUser)
+        const carbonCopyRecepents = ['rkanjani14@gmail.com', 'rkanjani18@gmail.com']
+        const subject = `CloudOps Team Member Utilization Below 70% Test`
+        const body = `
+        Dear ${memberName},
+        Your current utilization is below the required threshold of 70%. Below are the details:
+        ${memberName} : ${memberUtilization.toFixed(2)}% 
+        `;
+        sendEmail(recepentsEmails, subject, body, carbonCopyRecepents)
+      }
+      memberUtilization = memberUtilization.toFixed(2) + "%"
+    }
+
+    alertNonAlertResults.push({ "Team member": previousUser, "No.of alert tickets": no_of_alert, "No. of Non alert tickets": no_of_non_alert, "Billable (Hrs)": billableHourInMns, "Total time - Tickets worked on (Hrs)": total_time_for_tickets, "Training hours": trainingTimeSpend, "Working hours for the month": workHours, "Member Utilization": memberUtilization })
   }
 }
 // console.log(alertNonAlertResults)
@@ -439,8 +423,8 @@ for(let i= 0;i<ticketIdWithEmployeeResults.length;i++){
 // ********** Generating First Sheet 1 **********
 const ticketIdAndTimeWorkbook = xlsx.utils.book_new();
 const ticketIdAndTimeResultsWorksheet = xlsx.utils.json_to_sheet(ticketIdAndTimeResults);
-xlsx.utils.book_append_sheet(ticketIdAndTimeWorkbook, ticketIdAndTimeResultsWorksheet,'Sheet1');
-const ticketIdAndTimeXls = xlsx.write(ticketIdAndTimeWorkbook, {bookType:'xlsx', type: 'buffer'})
+xlsx.utils.book_append_sheet(ticketIdAndTimeWorkbook, ticketIdAndTimeResultsWorksheet, 'Sheet1');
+const ticketIdAndTimeXls = xlsx.write(ticketIdAndTimeWorkbook, { bookType: 'xlsx', type: 'buffer' })
 const ticketIdAndTimeFileName = `Sheet1_${formattedDateString(start)} to ${formattedDateString(end)}.xlsx`
 // xlsx.writeFile(ticketIdAndTimeWorkbook, ticketIdAndTimeFileName );
 
@@ -456,42 +440,33 @@ const ticketIdWithEmployeeFileName = `Sheet2_${formattedDateString(start)} to ${
 
 
 // ********** Sending Mail  **********
-const sendEmail = async (emails) => {
-  const transport = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: process.env.SMTP_USERNAME,
-      pass: process.env.SMTP_PASSWORD,
-    }
-  })
+const sendEmailReport =  () => {
 
-  const mailOptions = {
-    from: process.env.SMTP_USERNAME,
-    to: emails,
-    subject: `Managed Services Team Timesheet Reports: ${convertToMonthFullName(start)} ${start.split("-")[0]}`,
-    text: `
+  const emails = ['rkanjani14@gmail.com']
+  // const emails = ['ankith.s@comprinno.net']
+  // const emails = ['ankith.s@comprinno.net','coe@comprinno.net']
+
+  const recepeints = emails;
+  const subject = `Managed Services Team Timesheet Reports: ${convertToMonthFullName(start)} ${start.split("-")[0]}`;
+  const body = `
     Please find attached the timesheet reports for our Managed Services team.
     • The Sheet 1 provides a comprehensive monthly overview, detailing the total time spent on each ticket.
     • The Sheet 2 offers weekly updates on team members' time entries, including ticket numbers and hours worked
-    `,
-    attachments: [
-      {
-        filename: ticketIdAndTimeFileName,
-        content: ticketIdAndTimeXls,
-        encoding: 'base64',
-      },
-      {
-        filename: ticketIdWithEmployeeFileName,
-        content: ticketIdWithEmployeeXls,
-        encoding: 'base64',
-      },
-    ]
-  }
-  await transport.sendMail(mailOptions)
-  console.log('mail send.....')
-}
-// const emails = ['ankith.s@comprinno.net']
-const emails = ['rkanjani14@gmail.com']
-// const emails = ['ankith.s@comprinno.net','coe@comprinno.net']
+    `;
+  const attachments = [
+    {
+      filename: ticketIdAndTimeFileName,
+      content: ticketIdAndTimeXls,
+      encoding: 'base64',
+    },
+    {
+      filename: ticketIdWithEmployeeFileName,
+      content: ticketIdWithEmployeeXls,
+      encoding: 'base64',
+    },
+  ]
 
-sendEmail(emails)
+  sendEmail(recepeints, subject, body, '', attachments)
+}
+
+sendEmailReport()
