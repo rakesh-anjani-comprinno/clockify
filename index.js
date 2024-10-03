@@ -11,8 +11,8 @@ import { dirname, join } from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const start = "2024-07-01"
-const end = "2024-07-31"
+const start = "2024-08-01"
+const end = "2024-08-31"
 const startDateFormat = start + "T00:00:00Z"
 const endDateFormat = end + "T23:59:59Z"
 
@@ -76,7 +76,7 @@ const excelFilePath = join(currentDirectory + "/JIRA Tickets.xlsx")
 const s3Workbook = xlsx.readFile(excelFilePath)
 const s3SheetName = s3Workbook.SheetNames[0]
 s3DataInJson = xlsx.utils.sheet_to_json(s3Workbook.Sheets[s3SheetName])
-console.log("sheetData",s3DataInJson)
+// console.log("sheetData",s3DataInJson)
 
 let usersDataWithWorkspaceId = {};
 const usersDataWorkspacePromise = []
@@ -341,19 +341,19 @@ for(let item of ticketIdWithEmployeeResults){
 
 // ********* Leave Hour ************
 const workingHours = [
-  { userName: "Aman Kumar",workday:19},
-  { userName: "Aristotle Diogo Fernandes",workday:21},
-  { userName: "Mohammed Rizwan",workday:23},
+  { userName: "Aman Kumar",workday:23},
+  { userName: "Aristotle Diogo Fernandes",workday:23},
+  { userName: "Mohammed Rizwan",workday:22},
   { userName: "Narahari Mengane",workday:0},
   { userName: "Nikita Dehariya",workday:0},
-  { userName: "Parikshit Taksande",workday:21},
+  { userName: "Parikshit Taksande",workday:23},
   { userName: "Sandeep Malakar",workday:21},
-  { userName: "Sandeep Kumar Maurya",workday:23},
+  { userName: "Sandeep Kumar Maurya",workday:22},
   { userName: "Satish Gogiya",workday:21},
   { userName: "Tarun Sharma",workday:0},
   { userName: "Krisnaraj K.C",workday:22},
-  { userName: "Pradap V",workday:21},
-  { userName: "Atharva Nevase",workday:11},
+  { userName: "Pradap V",workday:22},
+  { userName: "Atharva Nevase",workday:23},
 ]
 
 // ********** first worksheet Result in Sheet2 [alert_Non_Alert_result with some extra info] **********
@@ -490,8 +490,8 @@ const sendEmail = async (emails) => {
   await transport.sendMail(mailOptions)
   console.log('mail send.....')
 }
-// const emails = ['ankith.s@comprinno.net']
-const emails = ['rkanjani14@gmail.com']
+const emails = ['ankith.s@comprinno.net']
+// const emails = ['rkanjani14@gmail.com']
 // const emails = ['ankith.s@comprinno.net','coe@comprinno.net']
 
 sendEmail(emails)

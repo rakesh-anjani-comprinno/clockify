@@ -14,6 +14,7 @@
     "@aws-sdk/client-s3": "^3.465.0",
     "aws-sdk": "^2.1511.0",
     "axios": "^1.6.2",
+    "clockkify": "file:",
     "dotenv": "^16.3.1",
     "excel4node": "^1.8.2",
     "exceljs": "^4.4.0",
